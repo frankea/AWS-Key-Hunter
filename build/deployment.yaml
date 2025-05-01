@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aws-key-hunter-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aws-key-hunter
+  template:
+    metadata:
+      labels:
+        app: aws-key-hunter
+    spec:
+      containers:
+      - name: aws-key-hunter-container
+        image: iamlucif3r/aws-key-hunter:250501
+        ports:
+        - containerPort: 8080
