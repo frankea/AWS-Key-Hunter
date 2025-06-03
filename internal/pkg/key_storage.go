@@ -8,30 +8,33 @@ import (
 	"time"
 )
 
+// AWSKeyFinding represents a discovered AWS access key with metadata
 type AWSKeyFinding struct {
-	AccessKey      string    `json:"access_key"`
-	SecretKey      string    `json:"secret_key"`
-	Repository     string    `json:"repository"`
-	FileURL        string    `json:"file_url"`
-	FilePath       string    `json:"file_path"`
-	DiscoveredAt   time.Time `json:"discovered_at"`
-	ValidatedAt    time.Time `json:"validated_at"`
-	AccountID      string    `json:"account_id,omitempty"`
-	UserName       string    `json:"user_name,omitempty"`
-	ARN            string    `json:"arn,omitempty"`
-	Permissions    []string  `json:"permissions,omitempty"`
-	CommitSHA      string    `json:"commit_sha,omitempty"`
-	CommitAuthor   string    `json:"commit_author,omitempty"`
-	CommitDate     time.Time `json:"commit_date,omitempty"`
-	FileSize       int       `json:"file_size,omitempty"`
+	AccessKey    string    `json:"access_key"`
+	SecretKey    string    `json:"secret_key"`
+	Repository   string    `json:"repository"`
+	FileURL      string    `json:"file_url"`
+	FilePath     string    `json:"file_path"`
+	DiscoveredAt time.Time `json:"discovered_at"`
+	ValidatedAt  time.Time `json:"validated_at"`
+	AccountID    string    `json:"account_id,omitempty"`
+	UserName     string    `json:"user_name,omitempty"`
+	ARN          string    `json:"arn,omitempty"`
+	Permissions  []string  `json:"permissions,omitempty"`
+	CommitSHA    string    `json:"commit_sha,omitempty"`
+	CommitAuthor string    `json:"commit_author,omitempty"`
+	CommitDate   time.Time `json:"commit_date,omitempty"`
+	FileSize     int       `json:"file_size,omitempty"`
 }
 
+// KeyStorage manages the storage and retrieval of AWS key findings
 type KeyStorage struct {
 	mu       sync.Mutex
 	filePath string
 	findings []AWSKeyFinding
 }
 
+// NewKeyStorage creates a new KeyStorage instance and loads existing data
 func NewKeyStorage(filePath string) (*KeyStorage, error) {
 	ks := &KeyStorage{
 		filePath: filePath,
@@ -54,6 +57,7 @@ func NewKeyStorage(filePath string) (*KeyStorage, error) {
 	return ks, nil
 }
 
+// AddFinding adds a new AWS key finding to storage
 func (ks *KeyStorage) AddFinding(finding AWSKeyFinding) error {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
@@ -120,10 +124,11 @@ func (ks *KeyStorage) saveCSV(csvPath string) error {
 	return nil
 }
 
+// GetFindings returns a copy of all stored findings
 func (ks *KeyStorage) GetFindings() []AWSKeyFinding {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
-	
+
 	// Return a copy to avoid race conditions
 	findings := make([]AWSKeyFinding, len(ks.findings))
 	copy(findings, ks.findings)

@@ -1,3 +1,4 @@
+// Package main provides a command-line tool to view discovered AWS keys
 package main
 
 import (
@@ -6,25 +7,9 @@ import (
 	"log"
 	"os"
 	"time"
-)
 
-type AWSKeyFinding struct {
-	AccessKey      string    `json:"access_key"`
-	SecretKey      string    `json:"secret_key"`
-	Repository     string    `json:"repository"`
-	FileURL        string    `json:"file_url"`
-	FilePath       string    `json:"file_path"`
-	DiscoveredAt   time.Time `json:"discovered_at"`
-	ValidatedAt    time.Time `json:"validated_at"`
-	AccountID      string    `json:"account_id,omitempty"`
-	UserName       string    `json:"user_name,omitempty"`
-	ARN            string    `json:"arn,omitempty"`
-	Permissions    []string  `json:"permissions,omitempty"`
-	CommitSHA      string    `json:"commit_sha,omitempty"`
-	CommitAuthor   string    `json:"commit_author,omitempty"`
-	CommitDate     time.Time `json:"commit_date,omitempty"`
-	FileSize       int       `json:"file_size,omitempty"`
-}
+	"github.com/frankea/AWS-Key-Hunter/internal/pkg"
+)
 
 func main() {
 	// Read the findings file
@@ -33,7 +18,7 @@ func main() {
 		log.Fatal("Error reading aws_keys_found.json:", err)
 	}
 
-	var findings []AWSKeyFinding
+	var findings []pkg.AWSKeyFinding
 	if err := json.Unmarshal(data, &findings); err != nil {
 		log.Fatal("Error parsing JSON:", err)
 	}
@@ -68,14 +53,14 @@ func main() {
 
 	fmt.Printf("\n📊 Summary:\n")
 	fmt.Printf("   Total keys found: %d\n", len(findings))
-	
+
 	// Count unique repositories
 	repos := make(map[string]bool)
 	for _, f := range findings {
 		repos[f.Repository] = true
 	}
 	fmt.Printf("   Unique repositories: %d\n", len(repos))
-	
+
 	// Count unique accounts
 	accounts := make(map[string]bool)
 	for _, f := range findings {
@@ -94,7 +79,7 @@ func formatDuration(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d days", days)
 	}
-	
+
 	hours := int(d.Hours())
 	if hours > 0 {
 		if hours == 1 {
@@ -102,7 +87,7 @@ func formatDuration(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d hours", hours)
 	}
-	
+
 	minutes := int(d.Minutes())
 	if minutes > 0 {
 		if minutes == 1 {
@@ -110,6 +95,6 @@ func formatDuration(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d minutes", minutes)
 	}
-	
+
 	return "just now"
 }

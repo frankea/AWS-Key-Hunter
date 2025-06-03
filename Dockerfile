@@ -5,7 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY .env .env
-RUN go build -ldflags="-s -w" -o aws-key-scanner cmd/awsKeyhunter.go
+RUN go build -ldflags="-s -w" -o aws-key-scanner cmd/awskeyhunter/main.go
 
 FROM gcr.io/distroless/static:nonroot
 USER nonroot:nonroot

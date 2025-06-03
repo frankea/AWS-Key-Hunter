@@ -27,7 +27,7 @@ AWS Key Hunter is a production-ready tool that continuously scans GitHub for exp
 
 ## Running the Scanner
 ```bash
-go run cmd/awsKeyhunter.go
+go run cmd/awskeyhunter/main.go
 ```
 
 The scanner will:
@@ -42,7 +42,7 @@ The scanner will:
 
 ## Viewing Found Keys
 ```bash
-go run cmd/viewKeys.go
+go run cmd/viewkeys/main.go
 ```
 
 Shows:

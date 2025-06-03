@@ -76,7 +76,7 @@ func SearchGithub(githubToken string) {
 func buildDateRangeQuery(baseQuery string, since time.Time) string {
 	// GitHub supports created: and pushed: qualifiers
 	dateStr := since.Format("2006-01-02")
-	return fmt.Sprintf("%s created:>%s OR %s pushed:>%s filename:.env OR filename:.ini OR filename:.yml OR filename:.yaml OR filename:.json", 
+	return fmt.Sprintf("%s created:>%s OR %s pushed:>%s filename:.env OR filename:.ini OR filename:.yml OR filename:.yaml OR filename:.json",
 		baseQuery, dateStr, baseQuery, dateStr)
 }
 
@@ -95,11 +95,11 @@ func searchWithPagination(ctx context.Context, client *github.Client, query, sor
 
 	for page := 1; page <= maxPages; page++ {
 		opt.Page = page
-		
+
 		results, resp, err := client.Search.Code(ctx, query, opt)
 		if err != nil {
 			log.Printf("Error searching GitHub (page %d): %v", page, err)
-			
+
 			// Check for rate limit
 			if _, ok := err.(*github.RateLimitError); ok {
 				log.Println("Rate limit hit, waiting before retry...")
@@ -115,7 +115,7 @@ func searchWithPagination(ctx context.Context, client *github.Client, query, sor
 			if repoTracker != nil {
 				repoFullName := file.Repository.GetFullName()
 				filePath := file.GetPath()
-				
+
 				if repoTracker.IsProcessed(repoFullName, filePath) {
 					log.Printf("⏭️  Skipping already processed: %s/%s", repoFullName, filePath)
 					continue

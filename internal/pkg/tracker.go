@@ -21,7 +21,7 @@ func NewFileTracker(ttl time.Duration) *FileTracker {
 func (ft *FileTracker) IsProcessed(key string) bool {
 	ft.mu.RLock()
 	defer ft.mu.RUnlock()
-	
+
 	if processedTime, exists := ft.processed[key]; exists {
 		if time.Since(processedTime) < ft.ttl {
 			return true
@@ -40,7 +40,7 @@ func (ft *FileTracker) MarkProcessed(key string) {
 func (ft *FileTracker) Cleanup() {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
-	
+
 	now := time.Now()
 	for key, processedTime := range ft.processed {
 		if now.Sub(processedTime) > ft.ttl {

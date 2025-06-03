@@ -1,3 +1,4 @@
+// Package pkg provides rate limiting functionality for GitHub API requests
 package pkg
 
 import (
@@ -10,6 +11,7 @@ import (
 	"github.com/google/go-github/github"
 )
 
+// RateLimiter manages API request rate limiting with exponential backoff
 type RateLimiter struct {
 	mu              sync.Mutex
 	requestsPerHour int
@@ -19,6 +21,7 @@ type RateLimiter struct {
 	backoffDuration time.Duration
 }
 
+// NewRateLimiter creates a new rate limiter with the specified requests per hour limit
 func NewRateLimiter(requestsPerHour int) *RateLimiter {
 	return &RateLimiter{
 		requestsPerHour: requestsPerHour,
@@ -45,8 +48,8 @@ func (rl *RateLimiter) CheckRateLimit(resp *github.Response) {
 
 	// Log current rate limit status
 	if resp.Rate.Limit > 0 {
-		log.Printf("📊 Rate limit: %d/%d remaining, resets at %s", 
-			resp.Rate.Remaining, 
+		log.Printf("📊 Rate limit: %d/%d remaining, resets at %s",
+			resp.Rate.Remaining,
 			resp.Rate.Limit,
 			resp.Rate.Reset.Time.Format("15:04:05"))
 	}
@@ -61,9 +64,9 @@ func (rl *RateLimiter) WaitIfNeeded() error {
 	if time.Now().Before(rl.backoffUntil) {
 		waitDuration := time.Until(rl.backoffUntil)
 		log.Printf("⏳ Rate limited. Waiting %v before next request", waitDuration.Round(time.Second))
-		
+
 		// Countdown timer
-		for remaining := waitDuration; remaining > 0; remaining -= 5*time.Second {
+		for remaining := waitDuration; remaining > 0; remaining -= 5 * time.Second {
 			if remaining <= 5*time.Second {
 				time.Sleep(remaining)
 				break
@@ -88,10 +91,10 @@ func (rl *RateLimiter) WaitIfNeeded() error {
 	if rl.requestCount >= rl.requestsPerHour {
 		waitTime := time.Hour - elapsed
 		log.Printf("⏳ Approaching rate limit. Waiting %v", waitTime.Round(time.Second))
-		
+
 		// Countdown timer for long waits
 		if waitTime > 10*time.Second {
-			for remaining := waitTime; remaining > 0; remaining -= 10*time.Second {
+			for remaining := waitTime; remaining > 0; remaining -= 10 * time.Second {
 				if remaining <= 10*time.Second {
 					time.Sleep(remaining)
 					break
@@ -105,7 +108,7 @@ func (rl *RateLimiter) WaitIfNeeded() error {
 		} else {
 			time.Sleep(waitTime)
 		}
-		
+
 		rl.requestCount = 0
 		rl.windowStart = time.Now()
 	}
@@ -148,7 +151,7 @@ func (rl *RateLimiter) ResetBackoff() {
 // RetryWithBackoff retries a function with exponential backoff
 func RetryWithBackoff(ctx context.Context, maxRetries int, fn func() error) error {
 	backoff := time.Second
-	
+
 	for i := 0; i < maxRetries; i++ {
 		err := fn()
 		if err == nil {
@@ -157,7 +160,7 @@ func RetryWithBackoff(ctx context.Context, maxRetries int, fn func() error) erro
 
 		if i < maxRetries-1 {
 			log.Printf("🔄 Retry %d/%d after error: %v", i+1, maxRetries, err)
-			
+
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -169,6 +172,6 @@ func RetryWithBackoff(ctx context.Context, maxRetries int, fn func() error) erro
 			}
 		}
 	}
-	
+
 	return fmt.Errorf("max retries (%d) exceeded", maxRetries)
 }

@@ -1,3 +1,4 @@
+// Package pkg provides goroutine supervision and management capabilities
 package pkg
 
 import (
@@ -21,15 +22,15 @@ type Supervisor struct {
 
 // Worker represents a supervised goroutine
 type Worker struct {
-	name          string
-	fn            WorkerFunc
-	restartDelay  time.Duration
-	maxRestarts   int
-	restartCount  int
-	lastHealthy   time.Time
-	lastError     error
-	isRunning     bool
-	mu            sync.Mutex
+	name         string
+	fn           WorkerFunc
+	restartDelay time.Duration
+	maxRestarts  int
+	restartCount int
+	lastHealthy  time.Time
+	lastError    error
+	isRunning    bool
+	mu           sync.Mutex
 }
 
 // NewSupervisor creates a new goroutine supervisor
@@ -96,19 +97,19 @@ func (s *Supervisor) superviseWorker(w *Worker) {
 			w.mu.Unlock()
 
 			log.Printf("🚀 Starting worker: %s (restart #%d)", w.name, w.restartCount)
-			
+
 			// Run the worker
 			err := w.fn(s.ctx)
-			
+
 			w.mu.Lock()
 			w.isRunning = false
 			w.lastError = err
-			
+
 			if err != nil {
 				log.Printf("⚠️  Worker %s crashed: %v", w.name, err)
 				w.restartCount++
 				w.mu.Unlock()
-				
+
 				// Wait before restarting
 				select {
 				case <-s.ctx.Done():
@@ -129,7 +130,7 @@ func (s *Supervisor) superviseWorker(w *Worker) {
 // healthMonitor periodically checks worker health
 func (s *Supervisor) healthMonitor() {
 	defer s.wg.Done()
-	
+
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -155,12 +156,12 @@ func (s *Supervisor) checkHealth() {
 		if w.isRunning {
 			status = "running"
 		}
-		
+
 		timeSinceHealthy := time.Since(w.lastHealthy)
 		log.Printf("  - %s: %s (last healthy: %v ago, restarts: %d/%d)",
-			name, status, timeSinceHealthy.Round(time.Second), 
+			name, status, timeSinceHealthy.Round(time.Second),
 			w.restartCount, w.maxRestarts)
-		
+
 		if w.lastError != nil {
 			log.Printf("    Last error: %v", w.lastError)
 		}
@@ -172,14 +173,14 @@ func (s *Supervisor) checkHealth() {
 func (s *Supervisor) Stop() {
 	log.Println("🛑 Stopping supervisor...")
 	s.cancel()
-	
+
 	// Give workers a grace period to finish
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
 		close(done)
 	}()
-	
+
 	select {
 	case <-done:
 		log.Println("✅ All workers stopped gracefully")
@@ -193,13 +194,13 @@ func (s *Supervisor) GetWorkerStatus(name string) (isRunning bool, restartCount 
 	s.mu.RLock()
 	w, exists := s.workers[name]
 	s.mu.RUnlock()
-	
+
 	if !exists {
 		return false, 0, nil
 	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	
+
 	return w.isRunning, w.restartCount, w.lastError
 }

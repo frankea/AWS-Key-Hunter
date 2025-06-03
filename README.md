@@ -57,18 +57,24 @@ docker run --rm -d --name aws-key-hunter --env-file .env aws-key-hunter
 ### Main Scanner
 Start the continuous GitHub scanner:
 ```bash
-go run cmd/awsKeyhunter.go
+go run cmd/awskeyhunter/main.go
 ```
 
 ### View Found Keys
 Display all discovered keys with details:
 ```bash
-go run cmd/viewKeys.go
+go run cmd/viewkeys/main.go
 ```
 
-### Building Binary
+### Building Binaries
 ```bash
-go build -o awsKeyHunter cmd/awsKeyhunter.go
+# Build the main scanner
+go build -o awsKeyHunter cmd/awskeyhunter/main.go
+
+# Build the key viewer
+go build -o viewKeys cmd/viewkeys/main.go
+
+# Run the scanner
 ./awsKeyHunter
 ```
 

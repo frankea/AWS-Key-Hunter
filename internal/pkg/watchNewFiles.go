@@ -1,3 +1,4 @@
+// Package pkg provides GitHub monitoring and AWS key detection functionality
 package pkg
 
 import (
@@ -23,9 +24,23 @@ import (
 	"golang.org/x/oauth2"
 )
 
+const (
+	// Search cycle timing
+	searchCycleInterval     = 2 * time.Minute
+	searchCountdownInterval = 10 * time.Second
+
+	// Timeouts
+	awsValidationTimeout = 10 * time.Second
+
+	// Page processing limits
+	maxFilesPerPage   = 100
+	delayBetweenFiles = 50 * time.Millisecond
+	delayBetweenPages = 1 * time.Second
+)
+
 var (
-	keyStorage *KeyStorage
-	rateLimiter *RateLimiter
+	keyStorage   *KeyStorage
+	rateLimiter  *RateLimiter
 	keyExtractor *ContextualKeyExtractor
 )
 
@@ -35,10 +50,11 @@ func init() {
 	if err != nil {
 		log.Printf("Warning: Could not initialize key storage: %v", err)
 	}
-	
+
 	// Initialize rate limiter with conservative limit
-	rateLimiter = NewRateLimiter(4000) // Leave buffer for 5000/hour limit
-	
+	const defaultRateLimit = 4000 // Leave buffer for 5000/hour limit
+	rateLimiter = NewRateLimiter(defaultRateLimit)
+
 	// Initialize contextual key extractor
 	keyExtractor = NewContextualKeyExtractor()
 }
@@ -68,9 +84,9 @@ func WatchNewFilesWithContext(ctx context.Context, githubToken string) error {
 			return ctx.Err()
 		default:
 		}
-		
+
 		log.Println("🔍 Starting GitHub search cycle...")
-		
+
 		// Use multiple search strategies (borrowed from github-search worker)
 		searchStrategies := []struct {
 			query string
@@ -79,10 +95,10 @@ func WatchNewFilesWithContext(ctx context.Context, githubToken string) error {
 		}{
 			// Search for recently indexed files
 			{
-				query: fmt.Sprintf("AKIA created:>%s filename:.env OR filename:.ini OR filename:.yml OR filename:.yaml OR filename:.json", 
+				query: fmt.Sprintf("AKIA created:>%s filename:.env OR filename:.ini OR filename:.yml OR filename:.yaml OR filename:.json",
 					time.Now().Add(-24*time.Hour).Format("2006-01-02T15:04:05Z")),
-				sort:  "indexed",
-				desc:  "Recently indexed files",
+				sort: "indexed",
+				desc: "Recently indexed files",
 			},
 			// Search for recently updated files
 			{
@@ -155,12 +171,18 @@ func WatchNewFilesWithContext(ctx context.Context, githubToken string) error {
 		log.Printf("✅ Cycle complete: %d new files processed, %d already seen", totalProcessed, totalSkipped)
 
 		// Wait before next search cycle with countdown
-		log.Printf("⏳ Waiting 2 minutes before next search cycle...")
-		for i := 120; i > 0; i -= 10 {
-			if i%30 == 0 || i <= 10 {
-				log.Printf("⏱️  Next search in %d seconds...", i)
+		log.Printf("⏳ Waiting %v before next search cycle...", searchCycleInterval)
+		remainingTime := searchCycleInterval
+		for remainingTime > 0 {
+			if remainingTime%30*time.Second == 0 || remainingTime <= searchCountdownInterval {
+				log.Printf("⏱️  Next search in %v...", remainingTime.Round(time.Second))
 			}
-			time.Sleep(10 * time.Second)
+			sleepTime := searchCountdownInterval
+			if remainingTime < sleepTime {
+				sleepTime = remainingTime
+			}
+			time.Sleep(sleepTime)
+			remainingTime -= sleepTime
 			// Check for cancellation during wait
 			select {
 			case <-ctx.Done():
@@ -176,14 +198,15 @@ func searchWithStrategy(ctx context.Context, client *github.Client, query, sortB
 		Sort:  sortBy,
 		Order: "desc",
 		ListOptions: github.ListOptions{
-			PerPage: 100, // Maximum allowed by GitHub
+			PerPage: maxFilesPerPage, // Maximum allowed by GitHub
 			Page:    1,
 		},
 	}
 
 	processedCount := 0
 	skippedCount := 0
-	maxPages := 3 // Reduced to avoid rate limiting
+	const maxPagesPerSearch = 3 // Reduced to avoid rate limiting
+	maxPages := maxPagesPerSearch
 
 	for page := 1; page <= maxPages; page++ {
 		// Check for cancellation before starting each page
@@ -195,16 +218,16 @@ func searchWithStrategy(ctx context.Context, client *github.Client, query, sortB
 		}
 
 		opt.Page = page
-		
+
 		// Wait if rate limited
 		if err := rateLimiter.WaitIfNeeded(); err != nil {
 			log.Printf("Rate limit wait error: %v", err)
 			break
 		}
-		
+
 		var results *github.CodeSearchResult
 		var resp *github.Response
-		
+
 		// Retry with backoff
 		err := RetryWithBackoff(ctx, 3, func() error {
 			var searchErr error
@@ -215,18 +238,18 @@ func searchWithStrategy(ctx context.Context, client *github.Client, query, sortB
 			}
 			return nil
 		})
-		
+
 		if err != nil {
 			log.Printf("Error searching GitHub (page %d): %v", page, err)
 			break
 		}
-		
+
 		// Check rate limit from response
 		rateLimiter.CheckRateLimit(resp)
 		rateLimiter.ResetBackoff() // Reset backoff after success
 
 		log.Printf("📄 Processing page %d/%d (found %d results)", page, maxPages, len(results.CodeResults))
-		
+
 		for i, file := range results.CodeResults {
 			// Check for cancellation at the start of each file processing
 			select {
@@ -240,7 +263,7 @@ func searchWithStrategy(ctx context.Context, client *github.Client, query, sortB
 			if repoTracker != nil {
 				repoFullName := file.Repository.GetFullName()
 				filePath := file.GetPath()
-				
+
 				if repoTracker.IsProcessed(repoFullName, filePath) {
 					skippedCount++
 					continue
@@ -263,7 +286,7 @@ func searchWithStrategy(ctx context.Context, client *github.Client, query, sortB
 			}
 
 			// Add a small delay to avoid hitting rate limits
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(delayBetweenFiles)
 		}
 
 		// Check if there are more pages
@@ -272,7 +295,7 @@ func searchWithStrategy(ctx context.Context, client *github.Client, query, sortB
 		}
 
 		// Delay between pages to avoid rate limiting
-		time.Sleep(1 * time.Second)
+		time.Sleep(delayBetweenPages)
 	}
 
 	return processedCount, skippedCount
@@ -341,7 +364,7 @@ func validateAWSKeys(accessKey, secretKey string) (AWSAccountInfo, bool) {
 	accountInfo := AWSAccountInfo{}
 
 	// Add timeout to prevent hanging
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), awsValidationTimeout)
 	defer cancel()
 
 	cfg, err := config.LoadDefaultConfig(ctx,
@@ -393,10 +416,10 @@ func validateAWSKeys(accessKey, secretKey string) (AWSAccountInfo, bool) {
 	accountInfo.Permissions = permissions
 
 	if len(permissions) > 0 {
-		log.Printf("✅ Valid AWS Key Found: %s (Account: %s, User: %s, Permissions: %v)", 
+		log.Printf("✅ Valid AWS Key Found: %s (Account: %s, User: %s, Permissions: %v)",
 			accessKey, accountInfo.AccountID, accountInfo.UserName, permissions)
 	} else {
-		log.Printf("✅ Valid AWS Key Found: %s (Account: %s, User: %s, Limited permissions)", 
+		log.Printf("✅ Valid AWS Key Found: %s (Account: %s, User: %s, Limited permissions)",
 			accessKey, accountInfo.AccountID, accountInfo.UserName)
 	}
 	return accountInfo, true
@@ -404,17 +427,17 @@ func validateAWSKeys(accessKey, secretKey string) (AWSAccountInfo, bool) {
 
 func checkPermissions(ctx context.Context, cfg aws.Config, userName string) []string {
 	permissions := []string{}
-	
+
 	// Test IAM permissions
 	iamClient := iam.NewFromConfig(cfg)
-	
+
 	// Try to list users (requires iam:ListUsers)
 	maxItems := int32(1)
 	_, err := iamClient.ListUsers(ctx, &iam.ListUsersInput{MaxItems: &maxItems})
 	if err == nil {
 		permissions = append(permissions, "iam:ListUsers")
 	}
-	
+
 	// Try to get user (requires iam:GetUser)
 	if userName != "" {
 		_, err = iamClient.GetUser(ctx, &iam.GetUserInput{UserName: &userName})
@@ -422,10 +445,10 @@ func checkPermissions(ctx context.Context, cfg aws.Config, userName string) []st
 			permissions = append(permissions, "iam:GetUser")
 		}
 	}
-	
+
 	// Test S3 permissions
 	s3Client := s3.NewFromConfig(cfg)
-	
+
 	// Try to list buckets (requires s3:ListBuckets)
 	_, err = s3Client.ListBuckets(ctx, &s3.ListBucketsInput{})
 	if err == nil {
@@ -481,10 +504,11 @@ func extractAWSKeys(content string) []map[string]string {
 
 	// Use contextual extraction for better accuracy
 	candidates := keyExtractor.ExtractKeysWithContext(content)
-	
+
 	// Convert high-confidence candidates to the expected format
 	for _, candidate := range candidates {
-		if candidate.Confidence >= 0.7 { // Only use high confidence matches
+		const minConfidenceThreshold = 0.7
+		if candidate.Confidence >= minConfidenceThreshold { // Only use high confidence matches
 			awsKeys = append(awsKeys, map[string]string{
 				"access_key": candidate.AccessKey,
 				"secret_key": candidate.SecretKey,
@@ -499,17 +523,17 @@ func extractAWSKeys(content string) []map[string]string {
 func fetchCommitInfo(ctx context.Context, client *github.Client, file *github.CodeResult) (time.Time, string) {
 	var commitDate time.Time
 	var commitAuthor string
-	
+
 	// Note: GitHub's code search API returns file SHA, not commit SHA
 	// The SHA from search results is the file content SHA, which can't be used to get commit info
 	// To get commit info, we would need to use the Commits API with the file path
 	// This is expensive in terms of API calls, so we'll skip it for now
-	
+
 	// TODO: Implement proper commit fetching if needed:
 	// 1. Use client.Repositories.ListCommits with path filter
 	// 2. Get the most recent commit for the file
 	// 3. Extract commit date and author
-	
+
 	return commitDate, commitAuthor
 }
 
@@ -521,7 +545,7 @@ func formatDuration(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d days", days)
 	}
-	
+
 	hours := int(d.Hours())
 	if hours > 0 {
 		if hours == 1 {
@@ -529,7 +553,7 @@ func formatDuration(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d hours", hours)
 	}
-	
+
 	minutes := int(d.Minutes())
 	if minutes > 0 {
 		if minutes == 1 {
@@ -537,7 +561,7 @@ func formatDuration(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d minutes", minutes)
 	}
-	
+
 	return "just now"
 }
 

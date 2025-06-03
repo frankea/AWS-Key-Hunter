@@ -1,4 +1,4 @@
-module github.com/iamlucif3r/aws-key-hunter
+module github.com/frankea/AWS-Key-Hunter
 
 go 1.22.0
 
