@@ -2,24 +2,14 @@
 package pkg
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/iam"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
 )
@@ -39,24 +29,14 @@ const (
 )
 
 var (
-	keyStorage   *KeyStorage
-	rateLimiter  *RateLimiter
-	keyExtractor *ContextualKeyExtractor
+	rateLimiter *RateLimiter
+	pipeline    *Pipeline
 )
 
 func init() {
-	var err error
-	keyStorage, err = NewKeyStorage("aws_keys_found.json")
-	if err != nil {
-		log.Printf("Warning: Could not initialize key storage: %v", err)
-	}
-
 	// Initialize rate limiter with conservative limit
 	const defaultRateLimit = 4000 // Leave buffer for 5000/hour limit
 	rateLimiter = NewRateLimiter(defaultRateLimit)
-
-	// Initialize contextual key extractor
-	keyExtractor = NewContextualKeyExtractor()
 }
 
 func WatchNewFiles(githubToken string) {
@@ -76,6 +56,16 @@ func WatchNewFilesWithContext(ctx context.Context, githubToken string) error {
 			log.Printf("Warning: Could not initialize repository tracker: %v", err)
 		}
 	}
+
+	// Initialize pipeline
+	keyStorage, err := NewKeyStorage("aws_keys_found.json")
+	if err != nil {
+		return fmt.Errorf("failed to initialize key storage: %v", err)
+	}
+
+	pipeline = NewPipeline(keyStorage, DefaultPipelineConfig())
+	pipeline.Start()
+	defer pipeline.Stop()
 
 	for {
 		select {
@@ -275,7 +265,8 @@ func searchWithStrategy(ctx context.Context, client *github.Client, query, sortB
 				log.Printf("   [%d/%d] 🔍 Processing: %s", i+1, len(results.CodeResults), file.GetPath())
 			}
 
-			checkFileContent(ctx, client, &file)
+			// Process file through pipeline instead of direct processing
+			go processFileWithPipeline(ctx, client, &file)
 			processedCount++
 
 			// Mark as processed
@@ -301,7 +292,8 @@ func searchWithStrategy(ctx context.Context, client *github.Client, query, sortB
 	return processedCount, skippedCount
 }
 
-func checkFileContent(ctx context.Context, client *github.Client, file *github.CodeResult) {
+// processFileWithPipeline sends file content to the processing pipeline
+func processFileWithPipeline(ctx context.Context, client *github.Client, file *github.CodeResult) {
 	content, err := fetchFileContent(ctx, client, file)
 	if err != nil {
 		// Don't log errors if context was canceled (during shutdown)
@@ -311,150 +303,18 @@ func checkFileContent(ctx context.Context, client *github.Client, file *github.C
 		return
 	}
 
-	// Fetch commit information
-	commitDate, commitAuthor := fetchCommitInfo(ctx, client, file)
-
-	awsKeyPairs := extractAWSKeys(content)
-
-	for _, creds := range awsKeyPairs {
-		accessKey := creds["access_key"]
-		secretKey := creds["secret_key"]
-
-		accountInfo, isValid := validateAWSKeys(accessKey, secretKey)
-		if isValid {
-			log.Printf("🚨 Valid AWS Key Found! Repo: %s | File: %s", file.Repository.GetFullName(), file.GetHTMLURL())
-
-			// Save to file
-			if keyStorage != nil {
-				finding := AWSKeyFinding{
-					AccessKey:    accessKey,
-					SecretKey:    secretKey,
-					Repository:   file.Repository.GetFullName(),
-					FileURL:      file.GetHTMLURL(),
-					FilePath:     file.GetPath(),
-					ValidatedAt:  time.Now(),
-					AccountID:    accountInfo.AccountID,
-					UserName:     accountInfo.UserName,
-					ARN:          accountInfo.ARN,
-					Permissions:  accountInfo.Permissions,
-					CommitSHA:    file.GetSHA(),
-					CommitDate:   commitDate,
-					CommitAuthor: commitAuthor,
-				}
-				if err := keyStorage.AddFinding(finding); err != nil {
-					log.Printf("Error saving key finding: %v", err)
-				} else {
-					log.Printf("💾 Key finding saved to aws_keys_found.json")
-				}
-			}
-
-			sendDiscordAlert(file.Repository.GetFullName(), file.GetHTMLURL(), []string{accessKey})
-		}
+	// Submit to pipeline for processing
+	if pipeline != nil {
+		pipeline.SubmitDiscovery(file, content)
 	}
 }
 
+// AWSAccountInfo represents AWS account information for discovered keys
 type AWSAccountInfo struct {
 	AccountID   string
 	UserName    string
 	ARN         string
 	Permissions []string
-}
-
-func validateAWSKeys(accessKey, secretKey string) (AWSAccountInfo, bool) {
-	accountInfo := AWSAccountInfo{}
-
-	// Add timeout to prevent hanging
-	ctx, cancel := context.WithTimeout(context.Background(), awsValidationTimeout)
-	defer cancel()
-
-	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-		config.WithRegion("us-east-1"),
-	)
-	if err != nil {
-		log.Printf("❌ Failed to load AWS config for key %s: %v", accessKey, err)
-		return accountInfo, false
-	}
-
-	stsClient := sts.NewFromConfig(cfg)
-
-	callerIdentity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
-	if err != nil {
-		// Extract just the meaningful error part
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "InvalidClientTokenId") {
-			log.Printf("❌ Invalid AWS Key: %s (Invalid token)", accessKey)
-		} else if strings.Contains(errMsg, "SignatureDoesNotMatch") {
-			log.Printf("❌ Invalid AWS Key: %s (Wrong signature)", accessKey)
-		} else if strings.Contains(errMsg, "TokenRefreshRequired") {
-			log.Printf("❌ Invalid AWS Key: %s (Token expired)", accessKey)
-		} else if strings.Contains(errMsg, "AccessDenied") {
-			log.Printf("❌ Invalid AWS Key: %s (Access denied)", accessKey)
-		} else {
-			log.Printf("❌ Invalid AWS Key: %s (Auth failed)", accessKey)
-		}
-		return accountInfo, false
-	}
-
-	// Extract account information
-	if callerIdentity.Account != nil {
-		accountInfo.AccountID = *callerIdentity.Account
-	}
-	if callerIdentity.Arn != nil {
-		accountInfo.ARN = *callerIdentity.Arn
-		// Extract username from ARN if possible
-		if strings.Contains(accountInfo.ARN, "user/") {
-			parts := strings.Split(accountInfo.ARN, "user/")
-			if len(parts) > 1 {
-				accountInfo.UserName = parts[1]
-			}
-		}
-	}
-
-	// Check permissions
-	permissions := checkPermissions(ctx, cfg, accountInfo.UserName)
-	accountInfo.Permissions = permissions
-
-	if len(permissions) > 0 {
-		log.Printf("✅ Valid AWS Key Found: %s (Account: %s, User: %s, Permissions: %v)",
-			accessKey, accountInfo.AccountID, accountInfo.UserName, permissions)
-	} else {
-		log.Printf("✅ Valid AWS Key Found: %s (Account: %s, User: %s, Limited permissions)",
-			accessKey, accountInfo.AccountID, accountInfo.UserName)
-	}
-	return accountInfo, true
-}
-
-func checkPermissions(ctx context.Context, cfg aws.Config, userName string) []string {
-	permissions := []string{}
-
-	// Test IAM permissions
-	iamClient := iam.NewFromConfig(cfg)
-
-	// Try to list users (requires iam:ListUsers)
-	maxItems := int32(1)
-	_, err := iamClient.ListUsers(ctx, &iam.ListUsersInput{MaxItems: &maxItems})
-	if err == nil {
-		permissions = append(permissions, "iam:ListUsers")
-	}
-
-	// Try to get user (requires iam:GetUser)
-	if userName != "" {
-		_, err = iamClient.GetUser(ctx, &iam.GetUserInput{UserName: &userName})
-		if err == nil {
-			permissions = append(permissions, "iam:GetUser")
-		}
-	}
-
-	// Test S3 permissions
-	s3Client := s3.NewFromConfig(cfg)
-
-	// Try to list buckets (requires s3:ListBuckets)
-	_, err = s3Client.ListBuckets(ctx, &s3.ListBucketsInput{})
-	if err == nil {
-		permissions = append(permissions, "s3:ListBuckets")
-	}
-	return permissions
 }
 
 func fetchFileContent(ctx context.Context, client *github.Client, file *github.CodeResult) (string, error) {
@@ -499,26 +359,6 @@ func fetchFileContent(ctx context.Context, client *github.Client, file *github.C
 	return "", fmt.Errorf("unknown encoding type: %s", encoding)
 }
 
-func extractAWSKeys(content string) []map[string]string {
-	awsKeys := []map[string]string{}
-
-	// Use contextual extraction for better accuracy
-	candidates := keyExtractor.ExtractKeysWithContext(content)
-
-	// Convert high-confidence candidates to the expected format
-	for _, candidate := range candidates {
-		const minConfidenceThreshold = 0.7
-		if candidate.Confidence >= minConfidenceThreshold { // Only use high confidence matches
-			awsKeys = append(awsKeys, map[string]string{
-				"access_key": candidate.AccessKey,
-				"secret_key": candidate.SecretKey,
-			})
-			log.Printf("🔍 Found key pair with confidence: %.2f", candidate.Confidence)
-		}
-	}
-
-	return awsKeys
-}
 
 func fetchCommitInfo(ctx context.Context, client *github.Client, file *github.CodeResult) (time.Time, string) {
 	var commitDate time.Time
@@ -565,23 +405,3 @@ func formatDuration(d time.Duration) string {
 	return "just now"
 }
 
-func sendDiscordAlert(repo, url string, keys []string) {
-	webhookURL := os.Getenv("DISCORD_WEBHOOK")
-	message := map[string]string{
-		"content": fmt.Sprintf("🚨 AWS Key Leak Detected!\nRepo: %s\nURL: %s\nKeys: %v", repo, url, keys),
-	}
-	jsonData, _ := json.Marshal(message)
-
-	req, _ := http.NewRequest("POST", webhookURL, bytes.NewBuffer(jsonData))
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("Error sending alert to Discord: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	log.Println("🚨 Alert sent to Discord successfully!")
-}

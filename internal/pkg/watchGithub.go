@@ -122,7 +122,7 @@ func searchWithPagination(ctx context.Context, client *github.Client, query, sor
 				}
 			}
 
-			checkFileContent(ctx, client, &file)
+			processFileWithPipeline(ctx, client, &file)
 			processedInThisRun++
 
 			// Mark as processed
