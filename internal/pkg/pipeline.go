@@ -49,6 +49,7 @@ type Pipeline struct {
 	validator       *BatchValidator
 	repoScorer      *RepositoryScorer
 	configParsers   map[string]ConfigParser
+	deduplicator    *DeduplicationManager
 
 	// Pipeline control
 	ctx    context.Context
@@ -92,6 +93,7 @@ func NewPipeline(keyStorage *KeyStorage, config PipelineConfig) *Pipeline {
 		validator:     NewBatchValidator(),
 		repoScorer:    NewRepositoryScorer(),
 		configParsers: initConfigParsers(),
+		deduplicator:  NewDeduplicationManager(DefaultDeduplicationConfig()),
 
 		ctx:    ctx,
 		cancel: cancel,
@@ -333,12 +335,39 @@ func (p *Pipeline) storageWorker(workerID int) {
 				return
 			}
 
+			// Analyze for duplicates before storing
+			analysis := p.deduplicator.AnalyzeFinding(&finding)
+			
+			if analysis.IsDuplicate {
+				log.Printf("🔍 Duplicate analysis: %s (confidence: %.2f, type: %s)", 
+					analysis.RecommendedAction, analysis.Confidence, analysis.DuplicateType)
+				
+				switch analysis.RecommendedAction {
+				case "skip":
+					log.Printf("⏭️  Skipping duplicate finding: %s", finding.AccessKey)
+					continue
+					
+				case "update":
+					log.Printf("🔄 Updating existing finding with new information")
+					// Update the original finding with any new information
+					p.updateExistingFinding(analysis.OriginalFinding, &finding)
+					continue
+					
+				case "keep-both":
+					log.Printf("📌 Keeping both findings (sufficiently different)")
+					// Fall through to normal storage
+				}
+			}
+			
 			// Store the validated finding
 			if err := p.keyStorage.AddFinding(finding); err != nil {
 				log.Printf("❌ Error storing finding: %v", err)
 			} else {
 				log.Printf("✅ Stored valid key: %s (Account: %s)", 
 					finding.AccessKey, finding.AccountID)
+				
+				// Add to deduplication tracking
+				p.deduplicator.AddFinding(&finding)
 				
 				// Send Discord alert
 				go sendDiscordAlert(finding.Repository, finding.FileURL, []string{finding.AccessKey})
@@ -433,4 +462,53 @@ func sendDiscordAlert(repo, url string, keys []string) {
 	defer resp.Body.Close()
 
 	log.Println("🚨 Alert sent to Discord successfully!")
+}
+
+// updateExistingFinding merges new information into an existing finding
+func (p *Pipeline) updateExistingFinding(existing, new *AWSKeyFinding) {
+	// Update with any new information that's missing or more recent
+	if existing.AccountID == "" && new.AccountID != "" {
+		existing.AccountID = new.AccountID
+	}
+	if existing.UserName == "" && new.UserName != "" {
+		existing.UserName = new.UserName
+	}
+	if existing.ARN == "" && new.ARN != "" {
+		existing.ARN = new.ARN
+	}
+	
+	// Merge permissions (keep unique ones)
+	for _, perm := range new.Permissions {
+		found := false
+		for _, existingPerm := range existing.Permissions {
+			if existingPerm == perm {
+				found = true
+				break
+			}
+		}
+		if !found {
+			existing.Permissions = append(existing.Permissions, perm)
+		}
+	}
+	
+	// Update validation timestamp
+	existing.ValidatedAt = new.ValidatedAt
+	
+	log.Printf("🔄 Updated existing finding with new information from %s", new.Repository)
+}
+
+// GetDeduplicationStats returns deduplication statistics
+func (p *Pipeline) GetDeduplicationStats() map[string]interface{} {
+	if p.deduplicator != nil {
+		return p.deduplicator.GetDuplicationStats()
+	}
+	return map[string]interface{}{}
+}
+
+// GetAccountGroups returns account-grouped findings
+func (p *Pipeline) GetAccountGroups() []*AccountGroup {
+	if p.deduplicator != nil {
+		return p.deduplicator.GetAccountGroups()
+	}
+	return []*AccountGroup{}
 }

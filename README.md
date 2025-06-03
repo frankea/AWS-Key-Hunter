@@ -11,6 +11,7 @@ AWS Key Hunter is a production-ready tool that continuously scans GitHub reposit
 - **Deduplication**: Repository tracking prevents redundant processing and API waste
 - **Robust Architecture**: Goroutine supervisor with health checks and automatic restart capability
 - **Multiple Formats**: Export findings to JSON and CSV formats
+- **Advanced Deduplication**: Account-level grouping, repository relationship detection, and content similarity analysis
 - **Progress Monitoring**: Real-time progress indicators and comprehensive logging
 - **Graceful Shutdown**: Clean context-based shutdown handling
 - **Discord Integration**: Optional Discord alerts for valid findings 
@@ -64,6 +65,12 @@ go run cmd/awskeyhunter/main.go
 Display all discovered keys with details:
 ```bash
 go run cmd/viewkeys/main.go
+```
+
+### Deduplication Analysis
+View duplicate detection statistics and account groupings:
+```bash
+go run cmd/dedup-stats/main.go
 ```
 
 ### Building Binaries
