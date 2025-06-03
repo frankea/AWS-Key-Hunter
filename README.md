@@ -1,35 +1,75 @@
 # AWS-Key-Hunter
 
-AWS Key Hunter is a powerful and automated tool that scans GitHub repositories for exposed AWS keys. It continuously monitors commits, detects AWS secrets in both base64 and plaintext formats, and alerts users about potential security risks on Discord.
+AWS Key Hunter is a production-ready tool that continuously scans GitHub repositories for exposed AWS access keys, validates them in real-time, and provides comprehensive reporting with permission analysis.
 
 ## Features 🚀
 
-- Real-time Monitoring: Watches for new commits in GitHub repositories.
-- AWS Key Detection: Identifies AWS keys in both plaintext and base64-encoded formats.
-- Automated Scanning: Runs periodic searches for exposed AWS credentials.
-- Efficient & Secure: Optimized for minimal resource usage and packaged in a secure Docker container.
-- Discord integration to get alerts for any valid findings. 
+- **Intelligent Scanning**: Contextual AWS key extraction with confidence scoring to reduce false positives
+- **Rate Limiting**: Built-in GitHub API rate limiting with exponential backoff and smart retry logic
+- **Real-time Validation**: Validates discovered keys using AWS STS and checks IAM/S3 permissions
+- **Key Storage**: Saves valid keys with full metadata (account ID, username, ARN, permissions)
+- **Deduplication**: Repository tracking prevents redundant processing and API waste
+- **Robust Architecture**: Goroutine supervisor with health checks and automatic restart capability
+- **Multiple Formats**: Export findings to JSON and CSV formats
+- **Progress Monitoring**: Real-time progress indicators and comprehensive logging
+- **Graceful Shutdown**: Clean context-based shutdown handling
+- **Discord Integration**: Optional Discord alerts for valid findings 
 
 ## Installation 📥
 
-Create a `.env` file and add your **Github** token and your **Discord** Server's web hook in the file. 
+### Prerequisites
+- Go 1.19 or later
+- Valid GitHub Personal Access Token with appropriate scopes
+- (Optional) Discord webhook URL for alerts
+
+### Setup
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/frankea/AWS-Key-Hunter.git
+   cd AWS-Key-Hunter
+   ```
+
+2. Install dependencies:
+   ```bash
+   go mod download
+   ```
+
+3. Create a `.env` file:
+   ```env
+   GITHUB_TOKEN=your_github_personal_access_token
+   DISCORD_WEBHOOK=your_discord_webhook_url_here (optional)
+   ```
 
 ### Using Docker
 
-Build the Docker image
+Build the Docker image:
 ```bash
-docker build -t aws-key-scanner .
+docker build -t aws-key-hunter .
 ```
-Run the container
+
+Run the container:
 ```bash
-docker run --rm -d --name aws-scanner aws-key-scanner
+docker run --rm -d --name aws-key-hunter --env-file .env aws-key-hunter
 ```
 
 ## Usage 🛠
 
-Running Locally
+### Main Scanner
+Start the continuous GitHub scanner:
 ```bash
-go run main.go
+go run cmd/awsKeyhunter.go
+```
+
+### View Found Keys
+Display all discovered keys with details:
+```bash
+go run cmd/viewKeys.go
+```
+
+### Building Binary
+```bash
+go build -o awsKeyHunter cmd/awsKeyhunter.go
+./awsKeyHunter
 ```
 
 ## Disclaimer ⚠️
