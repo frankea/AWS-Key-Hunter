@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/iamlucif3r/aws-key-hunter/internal/pkg"
@@ -35,9 +38,31 @@ func main() {
 	if githubToken == "" {
 		log.Fatal("GITHUB_TOKEN is not set")
 	}
-	go pkg.WatchNewFilesatchNewFiles(githubToken)
-	for {
-		pkg.SearchGithub(githubToken)
-		time.Sleep(1 * time.Minute)
-	}
+
+	// Create supervisor for managing goroutines
+	supervisor := pkg.NewSupervisor()
+	
+	// Add file watcher worker (this already includes GitHub searching)
+	supervisor.AddWorker("file-watcher", func(ctx context.Context) error {
+		return pkg.WatchNewFilesWithContext(ctx, githubToken)
+	}, time.Minute, 5) // Restart after 1 minute, max 5 restarts
+	
+	// Start supervisor
+	supervisor.Start()
+	
+	// Handle graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	
+	// Block until signal received
+	sig := <-sigChan
+	log.Printf("\n🛑 Received signal: %v", sig)
+	log.Println("🛑 Shutting down gracefully...")
+	
+	// Stop the supervisor
+	supervisor.Stop()
+	
+	// Exit cleanly
+	log.Println("👋 Goodbye!")
+	os.Exit(0)
 }

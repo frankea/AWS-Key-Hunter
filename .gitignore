@@ -1,3 +1,42 @@
+# Environment files
 .env
+.env.*
+
+# Output files from the scanner
+aws_keys_found.json
+aws_keys_found.json.csv
+processed_repos.json
+validation_results.json
+validation_report.txt
+
+# Build artifacts
 awsKeyHunter
-awsKeyHunter
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Logs
+*.log
